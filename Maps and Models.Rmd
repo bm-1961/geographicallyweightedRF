@@ -1,0 +1,1410 @@
+---
+title: "Mapping"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r,message=FALSE,results='hide',include=FALSE}
+library(sf)
+library(tmap)
+library(plotly)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(rjson)
+library(jsonlite)
+library(leaflet)
+library(RCurl)
+library(htmlwidgets)
+library(magrittr)
+library(widgetframe)
+library(grid)
+library(GWmodel)
+library(spdep)
+library(spatialreg)
+library(SpatialML)
+Birmingham_Shape <- st_read("birmingham.shp")
+Birmingham_Shape$LN_Price<- log(Birmingham_Shape$price_paid)
+
+```
+
+```{r,message=FALSE,results='hide',include=FALSE}
+p <- ggplot(Birmingham_Shape, aes(log(price_paid))) + 
+  geom_histogram(aes(y = ..density..), alpha = 0.7, fill = "#333333") + 
+  geom_density(fill = "#ff4d4d", alpha = 0.5) + 
+  theme(panel.background = element_rect(fill = '#ffffff')) + 
+  ggtitle("Birmingham House Price Density with Histogram overlay") +
+  xlab("Price (log)") +
+  ylab("Density (log)")
+
+
+p1 <- ggplot(Birmingham_Shape, aes(price_paid)) + 
+  geom_histogram(aes(y = ..density..), alpha = 0.7, fill = "#333333") + 
+  geom_density(fill = "#20f40c", alpha = 0.5) + 
+  theme(panel.background = element_rect(fill = '#ffffff')) + 
+  ggtitle("Birmingham House Price Density with Histogram overlay") +
+  xlab("Price") +
+  ylab("Density")
+
+```
+
+```{r,message=FALSE,results='hide',include=FALSE}
+## using a MULTIPOLYGON data set supplied with library(sf)
+nc <- Birmingham_Shape
+
+## convert the geometry of the `sf` object to SpatialPolygons
+spd <- sf::as_Spatial(st_geometry(nc), IDs = as.character(1:nrow(nc)))
+
+class(spd)
+# [1] "SpatialPolygons"
+# attr(,"package")
+# [1] "sp"
+
+## grab the data from the sf object
+df <- nc
+df$geometry <- NULL
+df <- as.data.frame(df)
+
+## create the SpatialPolygonsDataFrame
+spd <- sp::SpatialPolygonsDataFrame(spd, data = df)
+```
+
+```{r,message=FALSE,results='hide',include=FALSE}
+sf_bh<- st_as_sf(Birmingham_Shape)
+```
+
+```{r}
+
+```
+
+
+
+```{r,message=FALSE,results='hide',include=FALSE}
+breaks = c(0.5,1,1.5,2,2.5,3,3.5,4) * 100000
+
+benm <- tm_shape(Birmingham_Shape) +
+  tm_fill("price_paid",palette=c("red","white","blue"),style = "cont",title = "Median Household Price", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE,    main.title = "Median House Price
+            ", 
+    main.title.position = "center", title.size = 10,frame="white")
+
+library(cartogram)
+
+# construct a cartogram using the population in 2005
+afr_sf_cont <- cartogram_cont(spd, "persons", 5)
+
+
+ben <- tm_shape(afr_sf_cont) +
+  tm_fill("price_paid",palette=c("red","white","blue"),style = "cont",title = "Median Household Price", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE,    main.title = "Median House Price
+  (MSOA weighted by pop)", 
+    main.title.position = "center", title.size = 10,frame="white")
+
+tmap_save(tm =ben, "scaled.png")
+tmap_save(tm =benm, "standard_1.png")
+```
+
+```{r,message=FALSE,results='hide',include=FALSE}
+overlapmat = st_overlaps(Birmingham_Shape,sparse=FALSE)
+ovnb = mat2listw(overlapmat)
+wr <- nb2mat(ovnb$neighbours, style='B')
+contig<- ovnb$neighbours
+```
+
+```{r,message=FALSE,results='hide',include=FALSE}
+xy <- coordinates(spd)
+
+wd1 <- dnearneigh(xy, 0, 1500)
+
+wd2 <- dnearneigh(xy, 0, 2000)
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+k10 <- knn2nb(knearneigh(xy, k=10, RANN=FALSE))
+k5 <- knn2nb(knearneigh(xy, k=5, RANN=FALSE))
+k30 <- knn2nb(knearneigh(xy, k=30, RANN=FALSE))
+
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+library(RANN)
+pts <- coordinates(spd) # Get the centroid of each district
+knn <- nn2(pts, pts, k = 6)
+# Recall that using RANN includes each district as its own neighbour
+d <- knn$nn.dists   # The distances
+d <- d[,-1]         # Delete the first column of zero distances
+idw <- 1/d          # the inverse of distance 
+glist <- lapply(1:nrow(idw), function(i) idw[i,])
+# This is just a way of converting the inverse distances into weights
+knearnb <- knn2nb(knearneigh(xy, k=5, RANN=FALSE))
+spknear35IDW <- nb2listw(knearnb, glist=glist)
+# Combine the neighbourhood list with the inverse distance weighting
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+#convert to listw
+wr_lw <- nb2listw(contig, zero.policy=T)
+wd1_lw <- nb2listw(wd1, zero.policy=T)
+wd2_lw <- nb2listw(wd2, zero.policy=T)
+k5_lw <- nb2listw(k5, zero.policy=T)
+k10_lw <- nb2listw(k10, zero.policy=T)
+spknear35IDW_lw <- nb2listw(spknear35IDW$neighbours, zero.policy=TRUE)
+k30_lw <- nb2listw(k30, zero.policy=T)
+
+
+#run sim
+#run sim
+wr_moran<- moran.mc(Birmingham_Shape$LN_Price, wr_lw, nsim=99)
+wd1_moran<- moran.mc(Birmingham_Shape$LN_Price, wd1_lw,zero.policy=TRUE, nsim=99)
+wd2_moran<- moran.mc(Birmingham_Shape$LN_Price, wd2_lw,zero.policy=TRUE, nsim=99)
+k5_moran<- moran.mc(Birmingham_Shape$LN_Price, k5_lw, nsim=99)
+k10_moran<- moran.mc(Birmingham_Shape$LN_Price, k10_lw, nsim=99)
+spknear35IDW_moran<- moran.mc(Birmingham_Shape$LN_Price, spknear35IDW_lw, nsim=99)
+
+k30 <- knn2nb(knearneigh(xy, k=30, RANN=FALSE))
+k30_lw <- nb2listw(k30, zero.policy=T)
+k30_moran<- moran.mc(Birmingham_Shape$LN_Price, k30_lw, nsim=99)
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+knear250 <- knearneigh(xy, k=131)
+r <- sapply(1:131, function(i) {
+  cor(Birmingham_Shape$LN_Price, Birmingham_Shape$LN_Price[knear250$nn[,i]])
+})
+
+K_optimum<-data.frame(k = 1:131, r = r) %>%
+  ggplot(aes(x = k, y = r)) +
+  geom_line() +
+  geom_smooth(se = FALSE) +
+  xlab("kth nearest neighbour") +
+  ylab("Correlation, r")
+```
+
+
+```{r,message = FALSE,results='hide',include=FALSE}
+pts <- coordinates(spd) # Get the centroid of each district
+knn30 <- nn2(pts, pts, k = 30)
+# Recall that using RANN includes each district as its own neighbour
+d <- knn30$nn.dists   # The distances
+d <- d[,-1]         # Delete the first column of zero distances
+idw <- 1/d          # the inverse of distance 
+glist <- lapply(1:nrow(idw), function(i) idw[i,])
+# This is just a way of converting the inverse distances into weights
+knearnb30 <- knn2nb(knearneigh(xy, k=29, RANN=FALSE))
+spknear30IDW <- nb2listw(knearnb30, glist=glist, style = "C")
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+
+local <- localmoran(x = Birmingham_Shape$LN_Price, listw2U(spknear30IDW))
+
+moran.map <- cbind(spd, local)
+```
+
+
+```{r,message = FALSE,results='hide',include=FALSE}
+distances<- gw.dist(dp.locat = pts)
+
+bw<- bw.gwr(LN_Price ~ crimes +  detached  + new + freehld + d + pctunemp, data=spd, adaptive = T, dMat = distances, kernel = "gaussian")
+
+
+gwstats<- gwss(spd, vars = "LN_Price", adaptive =T, bw=bw)
+
+std<- data.frame(gwstats$SDF)
+
+```
+
+
+
+
+
+```{r,message = FALSE,results='hide',include=FALSE}
+std_1 <- cbind(spd, std)
+std_map<- tm_shape(std_1) +
+  tm_fill("LN_Price_LSD",palette=c("red","orange","yellow","green","blue"),title = "Standard Deviation",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+
+
+
+```
+
+
+
+
+
+```{r,message = FALSE,results='hide',include=FALSE}
+loacl_map_moran <- tm_shape(moran.map) +
+  tm_fill("Ii",palette=c("red","orange","yellow","green","blue"),title = "Local Moran Value",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+
+```{r,message = FALSE,results='hide',include=FALSE}
+model1 <- lm(LN_Price ~ crimes +  detached  + new + freehld + d + pctunemp, data=Birmingham_Shape)
+
+
+linear_moran<- lm.morantest(model1, listw2U(spknear30IDW))
+
+heter_graph<- plot(model1, which = 1)
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+
+residuals<- data.frame(model1$residuals)
+residuals_1 <- cbind(spd, residuals)
+residual_map<- tm_shape(residuals_1) +
+  tm_fill("model1.residuals",palette=c("red","orange","yellow","green","blue"),title = "Residuals", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+lm.LMtests(model1, spknear35IDW, test = c("LMerr","LMlag","RLMerr","RLMlag","SARMA"))
+```
+
+
+```{r,message = FALSE,results='hide',include=FALSE}
+fit_3_err <- errorsarlm(LN_Price ~ crimes +  detached  + new + freehld + d + pctunemp, data=Birmingham_Shape, spknear30IDW) 
+summary(fit_3_err)
+```
+
+
+```{r,message = FALSE,results='hide',include=FALSE}
+gwr.model <- gwr.basic(LN_Price ~ crimes +  detached  + new + freehld + d + pctunemp, data=spd, adaptive=T, dMat=distances, bw=bw, kernel = "gaussian")
+```
+
+
+```{r,message = FALSE,results='hide',include=FALSE}
+results<-as.data.frame(gwr.model$SDF)
+spd$coedetached<-results$detached
+spd$coefcrime<-results$crimes
+spd$coefd<-results$d
+spd$coefpctunemp<-results$pctunemp
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+detatched <- tm_shape(spd) +
+  tm_fill("coedetached",palette=c("red","orange","yellow","green","blue"),title = "Coef of Detatched House",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+freehold<-tm_shape(spd) +
+  tm_fill("coefcrime",palette=c("red","orange","yellow","green","blue"),title = "Coef of Crime",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+distance<-tm_shape(spd) +
+  tm_fill("coefd",palette=c("red","orange","yellow","green","blue"),title = "Coef of Dist
+          to City Centre",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+
+```{r,message = FALSE,results='hide',include=FALSE}
+pct_unemp<-tm_shape(spd) +
+  tm_fill("coefpctunemp",palette=c("red","orange","yellow","green","blue"),title = "% Unemployed",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+
+
+```{r,message = FALSE,results='hide',include=FALSE}
+
+BRF <- function(formula, dframe, bw, kernel, spd, ntree=500, mtry=NULL, importance=TRUE, forests = TRUE, kz=6, ky=5)
+  {
+    library(randomForest)
+    f <- formula(formula)
+    RNames <- attr(terms(f), "term.labels")
+    ModelVarNo <- length(RNames)
+    ntrees <- ntree
+    Obs <- nrow(dframe)
+    if (is.null(mtry)) {mtry= max(floor(ModelVarNo/3), 1)}
+
+    message("\nNumber of Observations: ", Obs)
+    message("Number of Independent Variables: ", ModelVarNo)
+
+    if(kernel == 'adaptive')
+    {
+      Ne <- bw
+      message("Kernel: Adaptive\nNeightbours: ", Ne)
+    }
+    else
+    {
+      if(kernel == 'fixed')
+      {
+        message("Kernel: Fixed\nBandwidth: ", bw)
+      }
+    }
+
+    Gl.Model <- eval(substitute(randomForest(formula, data = dframe, ntree=ntree, mtry= mtry, importance=importance)))
+    yhat<-predict(Gl.Model, dframe)
+
+    message("Number of Variables: ", ModelVarNo)
+    message("\n--------------- Global Model Summary ---------------\n")
+
+    print(Gl.Model)
+
+    message("\nImportance:\n")
+    print(importance(Gl.Model))
+
+    g.RSS<-sum((Gl.Model$y-yhat)^2)
+    g.mean.y<-mean(Gl.Model$y)
+    g.TSS<-sum((Gl.Model$y-g.mean.y)^2)
+
+    g.r<-1-(g.RSS/g.TSS)
+
+    message("\nResidual Sum of Squares (Predicted): ", round(g.RSS,3))
+    message("R-squared (Predicted) %: ", round(100 * g.r,3))
+
+    pts <- coordinates(spd) # Get the centroid of each district
+    knn <- nn2(pts, pts, k = kz)
+    # Recall that using RANN includes each district as its own neighbour
+    d <- knn$nn.dists   # The distances
+    d <- d[,-1]         # Delete the first column of zero distances
+    idw <- 1/d          # the inverse of distance
+    
+    
+    DistanceT <- idw
+    Dij <- as.matrix(DistanceT)
+
+
+if (forests == TRUE) {LM_Forests <- as.list(rep(NA, length(ntrees)))}
+
+      LM_LEst1 <- as.data.frame(setNames(replicate(ModelVarNo,numeric(0), simplify = F), RNames[1:ModelVarNo]))
+      LM_LEst2 <- as.data.frame(setNames(replicate(ModelVarNo,numeric(0), simplify = F), RNames[1:ModelVarNo]))
+
+      LM_GofFit <- data.frame(y=numeric(0), LM_yfitOOB=numeric(0), LM_ResOOB=numeric(0), LM_yfitPred=numeric(0), LM_ResPred=numeric(0), LM_MSR=numeric(0), LM_Rsq100=numeric(0))
+
+      for(m in 1:Obs){
+
+        #Get the data
+        DNeighbour <- Dij[,ky]
+        DataSet <- data.frame(dframe, DNeighbour=DNeighbour)
+
+        #Sort by distance
+        DataSetSorted<- DataSet[order(DataSet$DNeighbour),]
+
+        if(kernel == 'adaptive')
+        {
+          #Keep Nearest Neighbours
+          SubSet <- DataSetSorted[1:Ne,]
+          Kernel_H <- max(SubSet$DNeighbour)
+        }
+        else
+        {
+          if(kernel == 'fixed')
+          {
+            SubSet <- subset(DataSetSorted, DNeighbour <= bw)
+            Kernel_H <- bw
+          }
+        }
+
+        #Bi-square weights
+        Wts<-(1-(SubSet$DNeighbour/Kernel_H)^2)^2
+
+        #Calculate WLM
+        Lcl.Model<-eval(substitute(randomForest(formula, data = SubSet, ntree=ntree, mtry= mtry, importance=importance)))
+
+        if (forests == TRUE) {LM_Forests[[m]]<-Lcl.Model}
+
+        #Store in table
+        #Importance
+        for (j in 1:ModelVarNo) {
+          LM_LEst1[m,j] <- importance(Lcl.Model)[j,1]
+          LM_LEst2[m,j] <- importance(Lcl.Model)[j,2]
+        }
+
+    #Observed y
+    LM_GofFit[m,1]<-Gl.Model$y[m]
+    LM_GofFit[m,2]<-Lcl.Model$predicted[[1]]
+    LM_GofFit[m,3]<-LM_GofFit[m,1] - LM_GofFit[m,2]
+    LM_GofFit[m,4]<-predict(Lcl.Model, dframe[m,])
+    LM_GofFit[m,5]<-LM_GofFit[m,1] - LM_GofFit[m,4]
+    LM_GofFit[m,6]<-Lcl.Model$mse[ntrees]
+    LM_GofFit[m,7]<-100 * Lcl.Model$rsq[ntrees]
+
+  }
+  if (forests == TRUE) {BRF.out<-list(Global.Model=Gl.Model, Locations = coords, Local.Pc.IncMSE= LM_LEst1, Local.IncNodePurity= LM_LEst2, LGofFit=LM_GofFit,Forests=LM_Forests)}
+  else {BRF.out<-list(Global.Model=Gl.Model, Locations = coords, Local.Pc.IncMSE= LM_LEst1, Local.IncNodePurity= LM_LEst2, LGofFit=LM_GofFit)}
+
+   message("\n--------------- Local Model Summary ---------------\n")
+
+   message("\nResiduals OOB:\n")
+   print(summary(BRF.out$LGofFit$LM_ResOOB))
+
+   message("\nResiduals Predicted:\n")
+   print(summary(BRF.out$LGofFit$LM_ResPred))
+
+   t1 <- data.frame(Min = apply(BRF.out$Local.Pc.IncMSE, 2, min), Max = apply(BRF.out$Local.Pc.IncMSE, 2, max),
+                     Mean = apply(BRF.out$Local.Pc.IncMSE, 2, mean), StD = apply(BRF.out$Local.Pc.IncMSE, 2, sd))
+
+   message("\n%IncMSE:\n")
+   print(t1)
+
+   t2 <- data.frame(Min = apply(BRF.out$Local.IncNodePurity, 2, min), Max = apply(BRF.out$Local.IncNodePurity, 2, max),
+                     Mean = apply(BRF.out$Local.IncNodePurity, 2, mean), StD = apply(BRF.out$Local.IncNodePurity, 2, sd))
+
+   message("\n%IncNodePurity: \n")
+   print(t2)
+
+   l.RSS.OOB<-sum(BRF.out$LGofFit$LM_ResOOB^2)
+   l.RSS.Pred<-sum(BRF.out$LGofFit$LM_ResPred^2)
+
+   mean.y<-mean(BRF.out$LGofFit$y)
+   TSS<-sum((BRF.out$LGofFit$y-mean.y)^2)
+
+
+   l.r.OOB<-1-(l.RSS.OOB/TSS)
+   message("\nResidual Sum of Squares (OOB): ", round(l.RSS.OOB,3))
+   message("R-squared (OOB) %: ", round(100* l.r.OOB,3))
+
+   l.r.Pred<-1-(l.RSS.Pred/TSS)
+   message("Residual Sum of Squares (Predicted): ", round(l.RSS.Pred,3))
+   message("R-squared (Predicted) %: ", round(100* l.r.Pred,3))
+
+   lModelSummary = list()
+   lModelSummary$l.IncMSE<-t1
+   lModelSummary$l.IncNodePurity<-t2
+   lModelSummary$l.RSS.OOB<-l.RSS.OOB
+   lModelSummary$l.r.OOB<-l.r.OOB
+   lModelSummary$l.RSS.Pred<-l.RSS.Pred
+   lModelSummary$l.r.Pred <-l.r.Pred
+
+
+   BRF.out$LocalModelSummary<-lModelSummary
+
+
+  return(BRF.out)
+}
+
+
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+BRF <- BRF(LN_Price ~ crimes +  detached  + new + freehld + d + pctunemp, dframe=spd, bw=30,
+kernel="adaptive", spd, kz=30, ky=29)
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+hi<-as.data.frame(BRF$Local.Pc.IncMSE)
+spd$rfdetached<-hi$detached
+spd$rffreehld<- hi$crimes
+spd$rfd<-hi$d
+spd$rfpctunemp<-hi$pctunemp
+spd$resid<- BRF$LGofFit$LM_Rsq100
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+rf_detatched_chart<-tm_shape(spd) +
+  tm_fill("rfdetached",palette=c("red","yellow","green"),title = "Detatched",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+rf_freehold_chart<-tm_shape(spd) +
+  tm_fill("rffreehld",palette=c("red","yellow","green"),title = "Freehold",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+rf_pctunemp_chart<-tm_shape(spd) +
+  tm_fill("rfpctunemp",palette=c("red","yellow","green"),title = "% Unemployed",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+
+
+
+```{r,message = FALSE,results='hide',include=FALSE}
+rf_d_chart<-tm_shape(spd) +
+  tm_fill("rfd",palette=c("red","yellow","green"),title = "Distance",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+```{r,message = FALSE,results='hide',include=FALSE}
+rf_resid<-tm_shape(spd) +
+  tm_fill("resid",palette=c("red","yellow","green"),title = "RF Local Coefficient",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+**Exploring House Price Data in Birmingham**
+
+To many economic geographers the notion that “spatial is special” is obvious. Afterall, Tobler’s first law of geography states “everything is related to everything else, but near things are more related than distant things" (1969). 
+
+Because of this, it is often assumed that analysis of geographic datasets will be done via the Geographically Weighted toolkit developed by Fotheringham et al. (2002) (or other comparable methodologies). However, a large volume of academic and commercial research still relies upon aspatial models – in particular, the Random Forest (“RF”).
+
+Whilst this preference can no doubt be partly attributed to a lack of geographic knowledge; in many cases it is appropriate to recognise the strong performance and generalisable nature offered by non-parametric models like RF.
+
+The following document therefore develops and presents a novel geographic variant of RF, in which the results are weighted by K-nearest neighbours. In doing so, the advantages of spatially weighted parametric models are married to the benefits of RF.
+
+To demonstrate the use of the spatially K-weighted RF (“SKWRF”), an analysis of Birmingham house price data is conducted. The research explores the relationship between dependent and independent variables rather than attempt to make predictions however.
+
+A brief layout of the document is included below:
+
+1)	Summary of data;
+2)	Comparison of Moran’s I via different neighbourhood weighting systems;
+3)	The results of an ordinary least squared regression (“OLS”);
+4)  The results of the spatial error model
+5)  The results of a geographically weighted regression (“GWR”);
+7)  The results of SKWRF; and
+8)	A review of the dataset.
+
+The code used to derive the analysis and create the SKWRF is presented at the bottom of the markdown to improve readability.
+
+**Summary of the Data**
+
+```{r,message=FALSE,echo = FALSE}
+subplot(p1, p,margin = 0.1, titleY = TRUE, titleX = TRUE)
+
+```
+
+Amongst Birmingham MSOA’s, the median house price is predominantly distributed between £80,000 to £300,000. However, like many continuous variables, there are significant outliers to the right end of the distribution. Subsequently, the data has a positive skew, with a mean house price > median house price > mode house price.
+
+Since the modelling of  non-normal distributions is likely to provide results which are also highly skewed, a log transformation is applied to the data analysed in research. 
+
+```{r, image_grobs,message=FALSE,echo=FALSE, fig.show = "hold", out.width = "50%", fig.align = "default"}
+library(knitr)
+include_graphics(c("standard_1.png", "scaled.png"))
+```
+
+A cursory look at the map of Birmingham shows the high value (blue) properties  are situated within two regions. These are the mid-west and north-west areas of the city. If we rescale the map by population size, it can be assumed that the mid-west MSOA’s represent densely populated city areas, whilst the North Western area is likely a more rural commuter belt since it is less densely populated (imagine metropolitan flats vs suburban homes with gardens). 
+
+Weighting the scales in this way demonstrates the need for a spatially aware methodology. This is because the underlying features which drive property price vary by geography. For instance, in a simple regression may crime may act as a confounding variable and correlate with high property prices in the mid-west region of Birmingham since it is a proxy for city proximity. Conversely, in the north-west suburb’s crime would likely drive down  property prices.
+
+**Comparison of Moran’s I via different neighbourhood weighting systems**
+
+To statistically determine (as opposed to eyeballing a map) whether it is necessary to use a spatially weighted methodology, it is necessary to calculate Moran’s I.
+
+Doing so requires the identification of neighbourhoods which can be done in numerous ways, however for the purpose of this study a few common variants have been show.
+
+From left to right, then top to bottom the variants are:
+
+1)	Nearest 5 K-nearest neighbours;
+2)	Nearest 10 K- nearest neighbours;
+3)	Nearest Inverse 5 K- nearest neighbours (same as above);
+4)	Contiguous neighbours;
+5)  Neighbours within 0-1000m; and
+6)	Neighbours within 0-1500m.
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+par(mfrow=c(1,2))
+
+plot(Birmingham_Shape$geometry,border="grey",main="5 K-Nearest Neighbours") + plot(k5, st_coordinates(st_centroid(Birmingham_Shape)),pch = 19, cex = 0.4, add=TRUE,col='red')
+
+plot(Birmingham_Shape$geometry,border="grey",main="10 K-Nearest Neighbours") + plot(k10, st_coordinates(st_centroid(Birmingham_Shape)),pch = 19, cex = 0.4, add=TRUE,col='red')
+```
+
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+par(mfrow=c(1,2))
+
+plot(Birmingham_Shape$geometry,border="grey",main="Inverse 5 K-
+     Nearest Neighbours") + plot(spknear35IDW, st_coordinates(st_centroid(Birmingham_Shape)),pch = 19, cex = 0.4, add=TRUE,col='red')
+
+plot(Birmingham_Shape$geometry,border="grey",main="Contiguous Neighbours") + plot(ovnb, st_coordinates(st_centroid(Birmingham_Shape)),pch = 19, cex = 0.4, add=TRUE,col='red')
+```
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+par(mfrow=c(1,2))
+
+plot(Birmingham_Shape$geometry,border="grey", main="  Neighbours Within 0-1500m") + plot(wd1, st_coordinates(st_centroid(Birmingham_Shape)),pch = 19, cex = 0.4, add=TRUE,col='red')
+
+plot(Birmingham_Shape$geometry,border="grey", main="  Neighbours Within 0-2000m") + plot(wd2, st_coordinates(st_centroid(Birmingham_Shape)),pch = 19, cex = 0.4, add=TRUE,col='red')
+```
+
+Once we have divided the MSOA’s into neighbourhoods, we can calculate Moran’s I. This can be done via regression or Monte Carlo simulation. Since the distribution of polygons in our dataset is irregular, the more robust Monte Carlo simulation is utilised as the tool of choice. In the table below we can see the results. The Monte Carlo distribution of simulations is then presented below.
+
+
+
+
+
+Neighbourhood       Moran's I      P-Value
+-------------   --------------- -------------
+Contiguous          0.619          0.01
+0-1000m             0.443          0.01
+0-2000m             0.449          0.01
+K 5                 0.512          0.01
+K 10                0.416          0.01
+K 5 (inverse)       0.512          0.01
+
+In each instance the computed P-Value suggests a significant result. As such we can reject the null hypothesis (that the median house price is randomly distributed among the MSOA's). Instead we can conclude that the spatial distribution of expensive and/or low cheap house prices in the dataset are more spatially clustered than would be expected if underlying spatial processes were random. This is clearly visualised in each of the Monte Carlo simulations below, where Moran's I sits well outside each of the simulated outcomes.
+
+Among the different conceptualizations of spatial relationships, the greatest level of spatial auto-correlation is present within the contiguous neighborhood calculation, with the least in the neighborhoods defined as being within 0-1000m of one another. Obviously this is a counter intuitive outcome, since the two measures of proximity should be very similar, however it is likely explained by the large number of neighbors without connections calculated via the distance method (distance is taken from the centoid not the border).
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+par(mfrow=c(1,2))
+plot(k5_moran,main="5 K-Nearest Neighbours",xlab="Brimingham Log House Price 
+     MC Simulation")
+plot(k10_moran,main="10 K-Nearest Neighbours",xlab="Brimingham Log House Price 
+     MC Simulation")
+```
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+par(mfrow=c(1,2))
+
+plot(spknear35IDW_moran,main="Inverse 5 K-Nearest Neighbours",xlab="Brimingham Log House Price 
+     MC Simulation")
+
+plot(wr_moran,main="Contiguous Neighbours",xlab="Brimingham Log House Price 
+     MC Simulation")
+```
+
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+par(mfrow=c(1,2))
+
+plot(wd1_moran,main="Neighbours within 0-1500m",xlab="Brimingham Log House Price 
+     MC Simulation")
+
+plot(wd2_moran,main="Neighbours within 0-2000m",xlab="Brimingham Log House Price 
+     MC Simulation")
+```
+
+After calculating the above we can select the most appropriate method of neighborhood calculation. Since the values of median price are skewed, the K means method is chosen. This is because  it has the advantage of being able to ensure there will be neighbours even in geographies where feature density varies widely. Similarly, because the target variable is continuous, inverse distances are more appropriate.
+
+The next step is then to calculate the optimum number of neighbours. In the below chart the correlation between the variable and its neighbours are plotted. We can see on the smoothed line that the rate of correlation begins to flatten out after the 40th neighbour - implying an optimum neighbourhood of inverse 40-k neaerest neighbours.
+
+Interestingly, the correlation begins to rise again at around the 70th neighbour.  
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+K_optimum
+```
+
+Additionally, it is possible to calculate each MSOA's local Moran value. As can be seen in the histogram below, the majority of local Moran values are greater than zero, suggesting they sit within a cluster of simmiliarly priced MSOA's. 
+
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+hist(moran.map$Ii,
+     main="Histogram for Local Moran", 
+     xlab="Local Moran",
+     border="white", 
+     col="blue",
+     xlim=c(-1,2),
+     las=1)
+```
+
+If we then map the data we can see the lower Moran values sit on the periphery of the city. It is thus possible to infer that further from the city centre price becomes more random and less affected by spatial properties. The exception to this rule is in the higher priced properties in the north of the city. Subsequently, other than in this area the relationship between the moran value and the standard deviation of the price is weak.
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+
+tmap_arrange(loacl_map_moran,std_map)
+
+```
+
+To formalise this statement we can plot the relationship between the local moran and the standard deviation of property price. As can be seen below, the regression line shows there is very little relationship. The exception to this being at the far right of the price distribution where the local moran is very high (likely signifying the spillover of the inner city).
+
+
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+y<- moran.map$Ii
+x<-std_1$LN_Price_LSD
+
+hi<- data.frame(moran.map,std_1)
+lms_std<- plot(x, y, main = "Local Moran Statistics",
+     xlab = "STD", ylab = "Local Moran Stat",
+     pch = 19, frame = FALSE)
+abline(lm(Ii ~ LN_Price_LSD, data = hi), col = "blue")
+```
+
+
+**The results of an ordinary least squared regression (“OLS”)**
+
+Returning to the discussion of aspatial models, a common practice by non-geographers is to attempt to  treat distance metrics as simply another feature. 
+
+For instance, in the dataset we are analysing one could attempt to use the varaible "d" to address spatial dependencies in the data - since it represents the distance from the inner city.
+
+Intuitively, the lower the value of "d", the higher the price of the house. And indeed we do see such an outcome in the regression, however because we know from looking at the map that the highest price houses are in the north (far away from the city centre), we cannot rely on this metric - and notably the regression recognises this as well and finds it not significant.
+
+Indeed,  from looking at the residuals in the table below it is immediately apparent that the model has a poor fit - since we would hope to see some degree of symmetry around the mean.
+
+Within the data selected we can most obviously see evidence of this problem by looking at the "freehld" variable. Properties which are a freehold should be worth more than those which are leasehold, however because inner city properties are more often a leasehold the inverse is true. As such the property price in certain areas are incorrectly penalised.
+
+
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE}
+summary(model1)
+```
+
+Looking at a map of residuals we can see evidence of spatial clustering which provides evidence of the aformentioned statement. Overestimation of values occures around the city centre, whilst there is a systematic undershooting only a little way north of the centre and in the north east.
+
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+residual_map
+```
+
+Looking at a scatter plot of the residuals vs fitted we can see further evidence of heteroscedacity. Were the models predictions centred on zero we could consider it a reasonable fit, however this is clearly not the case.
+
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+heter_graph<- plot(model1, which = 1)
+```
+
+Using a Moran test in which we correct for the fact that the residuals are the product of a regression, we obtain a statistically significant value for the Moran I statistic. 
+
+Additionally, the high observed Moran I suggests we need to to deal with the data in a spatially concious manner and cannot just use a simple aspatial regression. 
+
+Thus we now have sufficient motivation to deploy a spatially weighted model rather than an aspatial model.
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE}
+linear_moran
+```
+
+
+**Spatial Error Model **
+
+
+Two common approaches to dealing with spatial data are to use either a spatial lag or spatial error model. To decide which we can run a Lagrange test.
+
+If we calculate the Lagrange multiples we can then see that only the spatial error model is statistically significant, whilst the spatially lagged model is not. As such, we will want to run a spatial error model. 
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE}
+lm.LMtests(model1, spknear35IDW, test = c("LMerr","LMlag"))
+```
+
+Intuitively this makes sense. A spatially lagged model is appropriate for when we want to understand the the interactions between interdependent units (Darmofal, 2015: 4). Though this might be appropriate in areas where the development of a new school in one area directly raises property values in adjacent areas, this is unlikely to be the driving factor for house prices near cities.
+
+Instead, the spatial error model is more appropriate as the spatial dependence observed in our data does not reflect a truly spatial process, but merely the geographical clustering of points of interest (Darmofal, 2015: 4). For example, in this instance it is likely house prices simply cluster by geography due to either proximity to the city centre or planning permissions which facilitate larger gardens etc.
+
+Examining the results of the spatial model, we can see that although the distribution of residuals is still far from perfect, it is better than the OLS model. Interestingly, though there is little variation amongst the significance of individual variables, the regression does not recognise any as now signficant when they were not previously or vice versa. However, the standard error of the freehold variable has fallen, whilst that for distance has risen.
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE}
+summary(fit_3_err)
+```
+
+As per Burnham and Anderson (2004), a difference of ten between AIC scores suggests a better fit for the data with the lower score. Since the AIC of the OLS regression is -49.5 whilst the spatial error model is -82.2, there is very strong evidence that the spatial error model better describes the data. Similarly, because the log likelihood of the OLS model is 32.7 whilst for the spatial error model it is 50.1, there is further evidence in favour of the spatial error model. Finally, the R-squared of the model is 0.73 for the spatial error whilst the OLS model is only 0.65, again suggesting a better fit.
+
+However, as mentioned, the unequal distribution of residuals around the mean requires us to continue searching for a method which can adequately deal with spatial autocorrelation.
+
+**The results of a GWR**
+
+Moving onto the geographically weighted regression as a means of modelling the data, we can see the coefficient ranges for each variable in our model. If we examine the variable "detatched", the coefficients range from 1.28 to 2.19 (the amount which a 1 unit change in the variable changes the price of the median house in a given MSOA). For half of the dataset, as the number of detatched homes rises by one point, the price of houses will change by between 1.53 and 1.88 points (the inter-quartile range).
+
+Coefficients can also be seen for other variables, with crime, as previously hypothesised, having a large range in the amount of impact it has. To visualise this, we can plot the spatial patterning. Here it can be clearly seen, again as hypothesised, that crime correlates negatively with houses further from the city centre, but positively with houses which are closer.
+
+The spatial variation follows a simmilar pattern for the other variables below, with the exception of detatched housing - which is positive everywhere. The coefficient of detatched housing roughly increases as we move closer to the city centre - perhaps suggesting that it can be used as a proxy for the land value per square foot ceteris paribus, as opposed to house price.
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE}
+gwr.model
+```
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+tmap_arrange(detatched,freehold)
+```
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+tmap_arrange(distance,pct_unemp)
+```
+
+**The Restuls of GWRF**
+
+Finally we can apply the GWRF, though its use is typically as a predictive tool, we can see its application below as an explanatory model.
+
+The model is calibrated to calculate local Random Forests for the inverse 30-K Nearest neighbors. 
+
+Interestingly the model strength is largely consistent across the map of Birmingham (judged by taking the pseudo R2). The sptaial pattern is visually less striking than it might be perhaps because taking the k-nearest neighbour rather than a simple distance metric obscures it. The relatively low dispersion however suggests there is little need for the incorporation of additional variables in the model - even though a major advantage of RF is the ability to incorporate a large number of variables.
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+rf_resid
+```
+
+Beyond the above, the spatial variation in feature importance can also be calculated using the geographically weighted random forest - using the localised mean squared error as a proxy. Although the spatial patterns to the data are again less obvious than one would expect, we can see that the number of detatched properties is an important predictive feature in the north west of the city, whilst far less so in the similarly expensive city centre. Meanwhile the inverse is true for the distance from the city centre.
+
+It is of course important to note that the mean squared error tells us about what is an important predictive feature rather - and is not comparable with a map of coefficients.
+
+```{r,message=FALSE,echo = FALSE,warning = FALSE,results='hide'}
+
+tmap_arrange(rf_detatched_chart,rf_freehold_chart)
+tmap_arrange(rf_pctunemp_chart,rf_d_chart)
+
+```
+
+**Conclusion**
+
+The research presented above demonstrates the spatial heterogenity of house price data in Birmingham City and then presents to deconstruct the data via different models.
+
+Of the existing models shown above, the best fit unsurprisingly belonged to the geogrpahically weighted regression - however the virtue of creating local models means this is somewhat unsurprising. 
+
+For economists and estate agents the ability to identify the differing impact of features on the price of houses is of course important, and the being able to understand and analyse this information is important.
+
+The GWRF model presented above however has the advantage of incorporating the K-nearest neighbours rather than a simple distance metric to calculate house prices in each area. Though less useful than the GWR for explanatory powers, its capacity as a predictive model will need to be more fully explored elsewhere.
+
+To explore the results further, interpolation or krigging would likely reveal further insight into the features driving property prices in the Birmingham data. This is because social borders, though occasionally important, likely do not capture the true dynamics of real life and thus obscure the features driving house prices.
+
+Additionally, the work above has ignored the problem of temporal autocorrelation. Although it has been noted that treating spatial data as just another feature is incorrect, the treatment of temporal has been even worse here - since all we have done is identify when a proportion of properties were sold.
+
+
+
+
+
+
+**Import Data & Libraries**
+
+```{r, message=FALSE,warning = FALSE,results='hide'}
+library(sf)
+library(tmap)
+library(plotly)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(rjson)
+library(jsonlite)
+library(leaflet)
+library(RCurl)
+library(htmlwidgets)
+library(magrittr)
+library(widgetframe)
+library(grid)
+library(spdep)
+library(spatialreg)
+
+Birmingham_Shape <- st_read("birmingham.shp")
+Birmingham_Shape$LN_Price<- log(Birmingham_Shape$price_paid)
+```
+
+**Plot House Price Data**
+
+```{r,message = FALSE,results='hide'}
+p <- ggplot(Birmingham_Shape, aes(log(price_paid))) + 
+  geom_histogram(aes(y = ..density..), alpha = 0.7, fill = "#333333") + 
+  geom_density(fill = "#ff4d4d", alpha = 0.5) + 
+  theme(panel.background = element_rect(fill = '#ffffff')) + 
+  ggtitle("Birmingham House Price Density with Histogram overlay") +
+  xlab("Price (log)") +
+  ylab("Density (log)")
+
+
+p1 <- ggplot(Birmingham_Shape, aes(price_paid)) + 
+  geom_histogram(aes(y = ..density..), alpha = 0.7, fill = "#333333") + 
+  geom_density(fill = "#20f40c", alpha = 0.5) + 
+  theme(panel.background = element_rect(fill = '#ffffff')) + 
+  ggtitle("Birmingham House Price Density with Histogram overlay") +
+  xlab("Price") +
+  ylab("Density")
+
+```
+
+**Edit Data So Can be Viewed as a Cartogram**
+
+```{r,message = FALSE,results='hide'}
+## using a MULTIPOLYGON data set supplied with library(sf)
+nc <- Birmingham_Shape
+
+## convert the geometry of the `sf` object to SpatialPolygons
+spd <- sf::as_Spatial(st_geometry(nc), IDs = as.character(1:nrow(nc)))
+
+class(spd)
+# [1] "SpatialPolygons"
+# attr(,"package")
+# [1] "sp"
+
+## grab the data from the sf object
+df <- nc
+df$geometry <- NULL
+df <- as.data.frame(df)
+
+## create the SpatialPolygonsDataFrame
+spd <- sp::SpatialPolygonsDataFrame(spd, data = df)
+```
+
+**Create Map and Cartogram**
+
+```{r,message = FALSE,results='hide'}
+breaks = c(0.5,1,1.5,2,2.5,3,3.5,4) * 100000
+
+benm <- tm_shape(Birmingham_Shape) +
+  tm_fill("price_paid",palette=c("red","white","blue"),breaks = breaks,title = "Median Household Price") +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE,    main.title = "Median House Price
+            ", 
+    main.title.position = "center", title.size = 10,frame="white")
+
+library(cartogram)
+
+# construct a cartogram using the population in 2005
+afr_sf_cont <- cartogram_cont(spd, "persons", 5)
+
+
+ben <- tm_shape(afr_sf_cont) +
+  tm_fill("price_paid",palette=c("red","white","blue"),breaks = breaks,title = "Median Household Price") +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE,    main.title = "Median House Price
+  (MSOA weighted by pop)", 
+    main.title.position = "center", title.size = 10,frame="white")
+
+
+```
+
+**Create Map of Contiguous Neighbours**
+
+```{r,message = FALSE,results='hide'}
+overlapmat = st_overlaps(Birmingham_Shape,sparse=FALSE)
+ovnb = mat2listw(overlapmat)
+contig<- ovnb$neighbours
+wr <- nb2mat(ovnb$neighbours, style='B')
+```
+
+**Create Map of Neighbours by Distant**
+
+```{r,message = FALSE,results='hide'}
+xy <- coordinates(spd)
+
+wd1 <- dnearneigh(xy, 0, 1500)
+
+wd2 <- dnearneigh(xy, 0, 2000)
+```
+
+**Create Map of K-Nearest Neighbour**
+
+```{r,message = FALSE,results='hide'}
+k5 <- knn2nb(knearneigh(xy, k=5, RANN=FALSE))
+k10 <- knn2nb(knearneigh(xy, k=10, RANN=FALSE))
+```
+
+**Create Map of Inverse K-Nearest Neighbour**
+
+```{r,message = FALSE,results='hide'}
+library(RANN)
+pts <- coordinates(spd) # Get the centroid of each district
+knn <- nn2(pts, pts, k = 6)
+# Recall that using RANN includes each district as its own neighbour
+d <- knn$nn.dists   # The distances
+d <- d[,-1]         # Delete the first column of zero distances
+idw <- 1/d          # the inverse of distance 
+glist <- lapply(1:nrow(idw), function(i) idw[i,])
+# This is just a way of converting the inverse distances into weights
+knearnb <- knn2nb(knearneigh(xy, k=5, RANN=FALSE))
+spknear35IDW <- nb2listw(knearnb, glist=glist, style = "C")
+
+# Combine the neighbourhood list with the inverse distance weighting
+```
+
+**Run Monte Carlo Simulations to Calculate Moran's I for all Neighbourhoods**
+
+```{r,message = FALSE,results='hide'}
+#convert to listw
+wr_lw <- nb2listw(contig, zero.policy=T)
+wd1_lw <- nb2listw(wd1, zero.policy=T)
+wd2_lw <- nb2listw(wd2, zero.policy=T)
+k5_lw <- nb2listw(k5, zero.policy=T)
+k10_lw <- nb2listw(k10, zero.policy=T)
+spknear35IDW_lw <- nb2listw(spknear35IDW$neighbours, zero.policy=TRUE)
+
+
+#run sim
+wr_moran<- moran.mc(Birmingham_Shape$LN_Price, wr_lw, nsim=99)
+wd1_moran<- moran.mc(Birmingham_Shape$LN_Price, wd1_lw,zero.policy=TRUE, nsim=99)
+wd2_moran<- moran.mc(Birmingham_Shape$LN_Price, wd2_lw,zero.policy=TRUE, nsim=99)
+k5_moran<- moran.mc(Birmingham_Shape$LN_Price, k5_lw, nsim=99)
+k10_moran<- moran.mc(Birmingham_Shape$LN_Price, k10_lw, nsim=99)
+spknear35IDW_moran<- moran.mc(Birmingham_Shape$LN_Price, spknear35IDW_lw, nsim=99)
+```
+
+**Determine Optimum K Neighbours**
+
+```{r,message = FALSE,results='hide'}
+knear250 <- knearneigh(xy, k=130)
+r <- sapply(1:130, function(i) {
+  cor(Birmingham_Shape$LN_Price, Birmingham_Shape$LN_Price[knear250$nn[,i]])
+})
+
+K_optimum<-data.frame(k = 1:130, r = r) %>%
+  ggplot(aes(x = k, y = r)) +
+  geom_line() +
+  geom_smooth(se = FALSE) +
+  xlab("kth nearest neighbour") +
+  ylab("Correlation, r")
+```
+
+**30 Nearest Neighbours**
+
+```{r,message = FALSE,results='hide'}
+k30 <- knn2nb(knearneigh(xy, k=30, RANN=FALSE))
+k30_lw <- nb2listw(k30, zero.policy=T)
+k30_moran<- moran.mc(Birmingham_Shape$LN_Price, k30_lw, nsim=99)
+```
+
+**Inverse K-Nearest 30 Neighbours**
+
+```{r,message = FALSE,results='hide'}
+pts <- coordinates(spd) # Get the centroid of each district
+knn30 <- nn2(pts, pts, k = 30)
+# Recall that using RANN includes each district as its own neighbour
+d <- knn30$nn.dists   # The distances
+d <- d[,-1]         # Delete the first column of zero distances
+idw <- 1/d          # the inverse of distance 
+glist <- lapply(1:nrow(idw), function(i) idw[i,])
+# This is just a way of converting the inverse distances into weights
+knearnb30 <- knn2nb(knearneigh(xy, k=29, RANN=FALSE))
+spknear30IDW <- nb2listw(knearnb30, glist=glist, style = "C")
+
+```
+
+**Calculate Local Moran Values and Map**
+
+```{r,message = FALSE,results='hide'}
+local <- localmoran(x = Birmingham_Shape$LN_Price, spknear30IDW)
+
+moran.map <- cbind(spd, local)
+
+loacl_map_moran <- tm_shape(moran.map) +
+  tm_fill("Ii",palette=c("green","yellow","blue"),title = "Local Moran Value",style = "cont") +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+
+```
+
+**Calculate the STD**
+
+```{r,message = FALSE,results='hide'}
+std_1 <- cbind(spd, std)
+std_map<- tm_shape(std_1) +
+  tm_fill("LN_Price_LSD",title = "Standard Deviation",style = "cont") +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+
+**Run OLS Regression**
+
+```{r,message = FALSE,results='hide'}
+model1 <- lm(LN_Price ~ crimes +  detached  + new + freehld + d + pctunemp, data=Birmingham_Shape)
+
+
+linear_moran<- lm.morantest(model1, listw2U(spknear35IDW))
+
+
+
+
+```
+
+**Lagrange Multiplier Test**
+
+```{r,message = FALSE,results='hide'}
+lm_test <- lm.LMtests(model1, spknear35IDW, test = c("LMerr","LMlag","RLMerr","RLMlag","SARMA"))
+```
+
+
+**Spatial Error Model**
+
+
+```{r,message = FALSE,results='hide'}
+fit_3_err <- errorsarlm(LN_Price ~ crimes +  detached  + new + freehld + d + pctunemp, data=Birmingham_Shape, spknear30IDW)
+
+```
+
+**GWR Model**
+
+```{r,message = FALSE,results='hide'}
+gwr.model <- gwr.basic(LN_Price ~ crimes +  detached  + new + freehld + d + pctunemp, data=spd, adaptive=T, dMat=distances, bw=bw, kernel = "gaussian")
+```
+
+**Attach Coeffs to Dataframe**
+
+```{r,message = FALSE,results='hide'}
+results<-as.data.frame(gwr.model$SDF)
+spd$coedetached<-results$detached
+spd$coeffreehld<-results$freehld
+spd$coefd<-results$d
+```
+
+**Detatched Map**
+
+```{r,message = FALSE,results='hide'}
+detatched <- tm_shape(spd) +
+  tm_fill("coedetached",palette=c("red","orange","yellow","green","blue"),title = "Coef of Detatched House",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+**Crime Map**
+
+```{r,message = FALSE,results='hide'}
+freehold<-tm_shape(spd) +
+  tm_fill("coefcrime",palette=c("red","orange","yellow","green","blue"),title = "Coef of Freehold",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+**Distance from City Map**
+
+```{r,message = FALSE,results='hide'}
+distance<-tm_shape(spd) +
+  tm_fill("coefd",palette=c("red","orange","yellow","green","blue"),title = "Coef of Dist
+          to City Centre",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+**K-Nearest Neighbour Weighted Random Forest**
+
+```{r,message = FALSE,results='hide'}
+
+BRF <- function(formula, dframe, bw, kernel, spd, ntree=500, mtry=NULL, importance=TRUE, forests = TRUE, kz=6, ky=5)
+  {
+    library(randomForest)
+    f <- formula(formula)
+    RNames <- attr(terms(f), "term.labels")
+    ModelVarNo <- length(RNames)
+    ntrees <- ntree
+    Obs <- nrow(dframe)
+    if (is.null(mtry)) {mtry= max(floor(ModelVarNo/3), 1)}
+
+    message("\nNumber of Observations: ", Obs)
+    message("Number of Independent Variables: ", ModelVarNo)
+
+    if(kernel == 'adaptive')
+    {
+      Ne <- bw
+      message("Kernel: Adaptive\nNeightbours: ", Ne)
+    }
+    else
+    {
+      if(kernel == 'fixed')
+      {
+        message("Kernel: Fixed\nBandwidth: ", bw)
+      }
+    }
+
+    Gl.Model <- eval(substitute(randomForest(formula, data = dframe, ntree=ntree, mtry= mtry, importance=importance)))
+    yhat<-predict(Gl.Model, dframe)
+
+    message("Number of Variables: ", ModelVarNo)
+    message("\n--------------- Global Model Summary ---------------\n")
+
+    print(Gl.Model)
+
+    message("\nImportance:\n")
+    print(importance(Gl.Model))
+
+    g.RSS<-sum((Gl.Model$y-yhat)^2)
+    g.mean.y<-mean(Gl.Model$y)
+    g.TSS<-sum((Gl.Model$y-g.mean.y)^2)
+
+    g.r<-1-(g.RSS/g.TSS)
+
+    message("\nResidual Sum of Squares (Predicted): ", round(g.RSS,3))
+    message("R-squared (Predicted) %: ", round(100 * g.r,3))
+
+    pts <- coordinates(spd) # Get the centroid of each district
+    knn <- nn2(pts, pts, k = kz)
+    # Recall that using RANN includes each district as its own neighbour
+    d <- knn$nn.dists   # The distances
+    d <- d[,-1]         # Delete the first column of zero distances
+    idw <- 1/d          # the inverse of distance
+    
+    
+    DistanceT <- idw
+    Dij <- as.matrix(DistanceT)
+
+
+if (forests == TRUE) {LM_Forests <- as.list(rep(NA, length(ntrees)))}
+
+      LM_LEst1 <- as.data.frame(setNames(replicate(ModelVarNo,numeric(0), simplify = F), RNames[1:ModelVarNo]))
+      LM_LEst2 <- as.data.frame(setNames(replicate(ModelVarNo,numeric(0), simplify = F), RNames[1:ModelVarNo]))
+
+      LM_GofFit <- data.frame(y=numeric(0), LM_yfitOOB=numeric(0), LM_ResOOB=numeric(0), LM_yfitPred=numeric(0), LM_ResPred=numeric(0), LM_MSR=numeric(0), LM_Rsq100=numeric(0))
+
+      for(m in 1:Obs){
+
+        #Get the data
+        DNeighbour <- Dij[,ky]
+        DataSet <- data.frame(dframe, DNeighbour=DNeighbour)
+
+        #Sort by distance
+        DataSetSorted<- DataSet[order(DataSet$DNeighbour),]
+
+        if(kernel == 'adaptive')
+        {
+          #Keep Nearest Neighbours
+          SubSet <- DataSetSorted[1:Ne,]
+          Kernel_H <- max(SubSet$DNeighbour)
+        }
+        else
+        {
+          if(kernel == 'fixed')
+          {
+            SubSet <- subset(DataSetSorted, DNeighbour <= bw)
+            Kernel_H <- bw
+          }
+        }
+
+        #Bi-square weights
+        Wts<-(1-(SubSet$DNeighbour/Kernel_H)^2)^2
+
+        #Calculate WLM
+        Lcl.Model<-eval(substitute(randomForest(formula, data = SubSet, ntree=ntree, mtry= mtry, importance=importance)))
+
+        if (forests == TRUE) {LM_Forests[[m]]<-Lcl.Model}
+
+        #Store in table
+        #Importance
+        for (j in 1:ModelVarNo) {
+          LM_LEst1[m,j] <- importance(Lcl.Model)[j,1]
+          LM_LEst2[m,j] <- importance(Lcl.Model)[j,2]
+        }
+
+    #Observed y
+    LM_GofFit[m,1]<-Gl.Model$y[m]
+    LM_GofFit[m,2]<-Lcl.Model$predicted[[1]]
+    LM_GofFit[m,3]<-LM_GofFit[m,1] - LM_GofFit[m,2]
+    LM_GofFit[m,4]<-predict(Lcl.Model, dframe[m,])
+    LM_GofFit[m,5]<-LM_GofFit[m,1] - LM_GofFit[m,4]
+    LM_GofFit[m,6]<-Lcl.Model$mse[ntrees]
+    LM_GofFit[m,7]<-100 * Lcl.Model$rsq[ntrees]
+
+  }
+  if (forests == TRUE) {BRF.out<-list(Global.Model=Gl.Model, Locations = coords, Local.Pc.IncMSE= LM_LEst1, Local.IncNodePurity= LM_LEst2, LGofFit=LM_GofFit,Forests=LM_Forests)}
+  else {BRF.out<-list(Global.Model=Gl.Model, Locations = coords, Local.Pc.IncMSE= LM_LEst1, Local.IncNodePurity= LM_LEst2, LGofFit=LM_GofFit)}
+
+   message("\n--------------- Local Model Summary ---------------\n")
+
+   message("\nResiduals OOB:\n")
+   print(summary(BRF.out$LGofFit$LM_ResOOB))
+
+   message("\nResiduals Predicted:\n")
+   print(summary(BRF.out$LGofFit$LM_ResPred))
+
+   t1 <- data.frame(Min = apply(BRF.out$Local.Pc.IncMSE, 2, min), Max = apply(BRF.out$Local.Pc.IncMSE, 2, max),
+                     Mean = apply(BRF.out$Local.Pc.IncMSE, 2, mean), StD = apply(BRF.out$Local.Pc.IncMSE, 2, sd))
+
+   message("\n%IncMSE:\n")
+   print(t1)
+
+   t2 <- data.frame(Min = apply(BRF.out$Local.IncNodePurity, 2, min), Max = apply(BRF.out$Local.IncNodePurity, 2, max),
+                     Mean = apply(BRF.out$Local.IncNodePurity, 2, mean), StD = apply(BRF.out$Local.IncNodePurity, 2, sd))
+
+   message("\n%IncNodePurity: \n")
+   print(t2)
+
+   l.RSS.OOB<-sum(BRF.out$LGofFit$LM_ResOOB^2)
+   l.RSS.Pred<-sum(BRF.out$LGofFit$LM_ResPred^2)
+
+   mean.y<-mean(BRF.out$LGofFit$y)
+   TSS<-sum((BRF.out$LGofFit$y-mean.y)^2)
+
+
+   l.r.OOB<-1-(l.RSS.OOB/TSS)
+   message("\nResidual Sum of Squares (OOB): ", round(l.RSS.OOB,3))
+   message("R-squared (OOB) %: ", round(100* l.r.OOB,3))
+
+   l.r.Pred<-1-(l.RSS.Pred/TSS)
+   message("Residual Sum of Squares (Predicted): ", round(l.RSS.Pred,3))
+   message("R-squared (Predicted) %: ", round(100* l.r.Pred,3))
+
+   lModelSummary = list()
+   lModelSummary$l.IncMSE<-t1
+   lModelSummary$l.IncNodePurity<-t2
+   lModelSummary$l.RSS.OOB<-l.RSS.OOB
+   lModelSummary$l.r.OOB<-l.r.OOB
+   lModelSummary$l.RSS.Pred<-l.RSS.Pred
+   lModelSummary$l.r.Pred <-l.r.Pred
+
+
+   BRF.out$LocalModelSummary<-lModelSummary
+
+
+  return(BRF.out)
+}
+
+
+```
+
+**The GWRF Model**
+
+```{r,message = FALSE,results='hide'}
+BRF <- BRF(LN_Price ~ crimes +  detached  + new + freehld + d + pctunemp, dframe=spd, bw=30,
+kernel="adaptive", spd, kz=30, ky=29)
+```
+
+**Attach Variables to SPD Dataframe**
+
+```{r,message = FALSE,results='hide'}
+hi<-as.data.frame(BRF$Local.Pc.IncMSE)
+spd$rfdetached<-hi$detached
+spd$rffreehld<- hi$crimes
+spd$rfd<-hi$d
+spd$rfpctunemp<-hi$pctunemp
+```
+
+**RF Detatched Chart**
+
+```{r,message = FALSE,results='hide'}
+rf_detatched_chart<-tm_shape(spd) +
+  tm_fill("rfdetached",palette=c("red","orange","yellow","green","blue"),title = "Detatched",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+**RF Freehold Chart**
+
+
+```{r,message = FALSE,results='hide'}
+rf_freehold_chart<-tm_shape(spd) +
+  tm_fill("rffreehld",palette=c("red","orange","yellow","green","blue"),title = "Freehold",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+**RF %Unemployed Chart**
+
+
+```{r,message = FALSE,results='hide'}
+rf_pctunemp_chart<-tm_shape(spd) +
+  tm_fill("rfpctunemp",palette=c("red","orange","yellow","green","blue"),title = "% Unemployed",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+**RF Distance from City Centre Chart**
+
+
+
+```{r,message = FALSE,results='hide'}
+rf_d_chart<-tm_shape(spd) +
+  tm_fill("rfd",palette=c("red","orange","yellow","green","blue"),title = "Distance",style = "cont", midpoint = NA) +
+  tm_borders()+
+  tm_layout(legend.outside = TRUE, 
+    main.title.position = "center", title.size = 10,frame="white")
+```
+
+
+
+
+
+
